@@ -1,6 +1,9 @@
 from pyniryo import NiryoRobot
 import numpy as np
-import cv2, time, serial
+import cv2, time, serial, json
+import paho.mqtt.client as mqtt
+
+
 
 
 robot_ip= "200.126.13.186"
@@ -8,11 +11,23 @@ robot= NiryoRobot(robot_ip)
 heltec=serial.Serial('COM3', 115200, timeout=1)
 
 
+# Configuración MQTT para Ignition
+MQTT_BROKER = "localhost"        
+MQTT_PORT = 1883
+MQTT_USER = "admin"
+MQTT_PASS = "admin123"
+
+TOPIC_ESTADO = "fabrica/linea1/estado"
+TOPIC_COMANDOS = "fabrica/linea1/comando"
+
+sistema_activo = False
 
 home=[0,0,0,0,0,0]
 aproxpick=[0.044,-0.215,-0.585,0.167,-0.695,0.005]
 pick=[0.006,-0.743,-0.431,0.192,-0.494,-0.005]
 
+
+#robot.set_learning_mode(True)
 
 def home_position():
     print("Volviendo a la posicion de home")
@@ -57,7 +72,7 @@ def clasificacion_cajas(img_compressed):
     else:
         return "LARGE"
 
-robot.set_learning_mode(True)
+
 
 
 def alta():
@@ -97,18 +112,57 @@ def soltar_caja():
 
 
 def banda_transportadora():
+    print("Iniciando la banda transportadora...")
+    heltec.flushInput()
+    heltec.write(b'START\n')
+    while True:
+        if heltec.in_waiting > 0:
+            respuesta=heltec.readline().decode('utf-8').strip()
+            if respuesta == "caja_detectada":
+                print("Caja detectada en la banda transportadora")
+                return True
+        time.sleep(0.02)
+    return False
 
-   print("Iniciando la banda transportadora...")
-   heltec.flushInput()
-   heltec.write(b'START\n')
-   while True:
-    if heltec.in_waiting > 0:
-        respuesta=heltec.readline().decode('utf-8').strip()
-        if respuesta == "caja_detectada":
-            print("Caja detectada en la banda transportadora")
-    time.sleep(0.02)
+
+def coneccion_mqtt(client, userdata, flags, rc):
+    if rc == 0:
+        print("Conexión MQTT exitosa")
+        client.subscribe(TOPIC_COMANDOS)
+    else:
+        print(f"Error de conexión MQTT: {rc}")
 
 
+def on_message(client, userdata, msg):
+    global sistema_activo
+    payload = msg.payload.decode('utf-8').strip()
+    print(f"[MQTT ◄ HMI] Comando recibido desde Ignition: {payload}")
+    
+    if payload == "START":
+        sistema_activo = True
+    elif payload == "STOP":
+        sistema_activo = False
+
+mqtt_client = mqtt.Client(client_id="Python_Niryo_Controller")
+mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+mqtt_client.on_connect = coneccion_mqtt
+mqtt_client.on_message = on_message
+
+try:
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client.loop_start()  # Hilo en segundo plano para escuchar al HMI
+except Exception as e:
+    print(f"[MQTT ERROR] No se pudo conectar a Ignition: {e}")
+
+def publicar_datos(banda, caja, area_px, robot_estado):
+    """ Envia el estado actual del proceso a los Tags de Ignition """
+    payload = {
+        "banda": banda,              
+        "caja": caja,                 
+        "area_px": round(area_px, 1), 
+        "robot": robot_estado         
+    }
+    mqtt_client.publish(TOPIC_ESTADO, json.dumps(payload))
 
 
 def main():
@@ -117,6 +171,17 @@ def main():
 
     # 1. Mover el robot a la posición de inicio
     home_position()
+
+    print("Esperando a que el sistema se active desde Ignition...")
+
+    while True:
+        if  not sistema_activo:
+            publicar_datos("Stopped", "Ninguna", 0, "Standby")
+        time.sleep(0.5)
+        continue
+
+    publicar_datos("Running", "Ninguna", 0, "Esperando caja")
+    caja_en_posicion = banda_transportadora(heltec)
 
     # 2. Clasificar la caja usando la cámara
     categoria= clasificacion_cajas(captura)
