@@ -21,6 +21,9 @@ TOPIC_COMANDOS = "fabrica/linea1/comando"
 
 sistema_activo = False
 
+cont_small = 0
+cont_large = 0
+
 # Poses
 home = [0, 0, 0, 0, 0, 0]
 aproxpick = [0.044, -0.215, -0.585, 0.167, -0.695, 0.005]
@@ -152,7 +155,9 @@ def publicar_datos(banda, caja, area_px, robot_estado):
         "banda": banda,              
         "caja": caja,                 
         "area_px": round(area_px, 1), 
-        "robot": robot_estado         
+        "robot": robot_estado,
+        "cont_small": cont_small,
+        "cont_large": cont_large,       
     }
     mqtt_client.publish(TOPIC_ESTADO, json.dumps(payload))
 
@@ -193,17 +198,19 @@ def main():
         # 3. Mover robot según la clasificación
         if categoria == "SMALL":    
             print("[PROCESO] Caja PEQUEÑA detectada")
-            publicar_datos("Stopped", categoria, area_px, "Tomando caja")
+            cont_small += 1  # Incrementamos contador de cajas pequeñas
+            print(f"[CONTEO] Caja pequeña clasificada. Total: {cont_small}")
+            publicar_datos("Running", "SMALL", area_px, "Moviendo a Repisa Alta")
+            #publicar_datos("Stopped", categoria, area_px, "Tomando caja")
+
             tomar_caja()
-            
-            publicar_datos("Stopped", categoria, area_px, "Llevando a Repisa Alta")
             alta()
             soltar_caja()
             home_position()
 
         elif categoria == "LARGE":
-            print("[PROCESO] Caja GRANDE detectada")
-            publicar_datos("Stopped", categoria, area_px, "Tomando caja")
+            print(f"[CONTEO] Caja LARGE clasificada. Total: {cont_large}")
+            publicar_datos("Running", "LARGE", area_px, "Moviendo a Repisa Baja")
             tomar_caja()
             
             publicar_datos("Stopped", categoria, area_px, "Llevando a Repisa Baja")
@@ -215,5 +222,4 @@ def main():
             print("[PROCESO] No se detectó ninguna caja válida. Volviendo a home.")
             home_position()
 
-if __name__ == "__main__":
-    main()
+publicar_datos("Running", "Ninguna", 0, "Esperando caja")
